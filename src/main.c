@@ -7,6 +7,9 @@
 
 #define TRUE 1
 
+/* KEYS */
+#define CTRL_KEY(k) ((k) & 0x1f)
+
 struct termios orig_termios;
 
 void panic(const char *s) {
@@ -39,28 +42,43 @@ void enableRawMode() {
 	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&raw) == -1) panic("tcgetattr");
 }
 
-int main() {
+char get_key() {
+	char c = '\0';
+	int8_t res = read(STDIN_FILENO, &c, 1);
 
+	if (res < 0 && errno != EAGAIN) {
+		panic("read");
+	}
+
+	return c;
+}
+
+void process_keypress(char c) {
+	switch (c) {
+		case CTRL_KEY('c'):
+		case 'q':
+			exit(0);
+			break;
+	}
+}
+
+void debug_keypress(char c) {
+	if (c == '\0') return;
+
+	if (iscntrl(c)) {
+		printf("%d\r\n", c);
+	} else {
+		printf("'%c' pressed with code '%i'\r\n", c, c);
+	}
+}
+
+int main() {
 	enableRawMode();
 
 	while (TRUE) {
-		char c = '\0';
-		int8_t res = read(STDIN_FILENO, &c, 1);
-
-		if (res == -1 && errno != EAGAIN) {
-			panic("read");
-			break;
-		}
-
-		if (res != 0)
-
-		if (iscntrl(c)) {
-			printf("%d\r\n", c);
-		} else {
-			printf("'%c' pressed with code '%i'\r\n", c, c);
-		}
-
-		if (c == 'q') break;
+		char c = get_key();
+		debug_keypress(c);
+		process_keypress(c);
 	}
 
 	return 0;
