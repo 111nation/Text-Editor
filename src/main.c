@@ -8,31 +8,33 @@
 #include <sys/ioctl.h>
 #include <string.h>
 
+#define VERSION "0.0.1"
+
 #define TRUE 1
 
 // e is idiomatic for editor
 
 struct editorConfig {
 	struct termios orig_termios;
-	unsigned int ws_col;
-	unsigned int ws_row;
+	unsigned int ws_col, ws_row;
+	unsigned int cx, cy;
 };
 
 struct editorConfig esettings;
 
-struct str {
+typedef struct {
 	char *buf;
 	unsigned int len; // Excludes null terminating character
-};
+} str;
 
-int str_init(struct str* self) {
+int str_init(str* self) {
 	if (self == NULL) return -1;
 	self->buf = NULL;
 	self->len = 0;
 	return 0;
 }
 
-int str_append(struct str* self, const char *s, unsigned int len) {
+int str_append(str* self, const char *s, unsigned int len) {
 	/// Appends string s 
 	/// Uses given length (Excluding null terminating character)
 	if (self == NULL) return -1;
@@ -49,7 +51,7 @@ int str_append(struct str* self, const char *s, unsigned int len) {
 	return 0;
 }
 
-void str_free(struct str* self) {
+void str_free(str* self) {
 	free(self->buf);
 }
 
@@ -57,24 +59,61 @@ void str_free(struct str* self) {
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 
-void edraw_rows() {
+void edraw_rows(str* buf) {
 	for (unsigned int i = 0; i < esettings.ws_row; i++) {
-		write(STDOUT_FILENO, "~", 1);
+
+		if (i == esettings.ws_row/2) {
+			char welcome[80];
+			int len = snprintf(welcome, sizeof(welcome), "Editor 1975 -- version %s", VERSION);
+
+			if (len > esettings.ws_col) len = esettings.ws_col;
+
+			int padding = (esettings.ws_col-len)/2;
+			if (padding) {
+				str_append(buf, "~", 1);
+				padding--;
+			}
+
+			while (padding--) str_append(buf, " ", 1);
+			str_append(buf, welcome, len);
+		} else {
+			str_append(buf, "~", 1);
+		}
+
+		str_append(buf, "\x1b[K", 3);
 		if (i < esettings.ws_row-1) {
-			write(STDOUT_FILENO, "\r\n", 2);
+			str_append(buf, "\r\n", 2);
 		}
 	}
 }
 
 void clear_screen() {
+	write(STDOUT_FILENO, "\x1b[?25l", 6);	
 	write(STDOUT_FILENO, "\x1b[2J", 4);
 	write(STDOUT_FILENO, "\x1b[H", 3);
+	write(STDOUT_FILENO, "\x1b[?25h", 6);	
 }
 
 void erefresh_screen() {
-	clear_screen();
-	edraw_rows();
-	write(STDOUT_FILENO, "\x1b[H", 3);
+	str buf;
+	str_init(&buf);
+
+	// Clear screen
+	str_append(&buf, "\x1b[?25l", 6);	 // Hide cursor
+	str_append(&buf, "\x1b[H", 3);
+
+	edraw_rows(&buf);
+
+	// Move cursor back to original position
+	char temp[32];
+	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", esettings.cy+1, esettings.cx+1);
+	str_append(&buf, temp, strlen(temp));
+
+	str_append(&buf, "\x1b[?25h", 6);	 // Unhide cursor
+
+	write(STDOUT_FILENO, buf.buf, buf.len);
+
+	str_free(&buf);
 }
 
 void panic(const char *s) {
@@ -126,6 +165,18 @@ void process_keypress(char c) {
 		case 'q':
 			clear_screen();
 			exit(0);
+			break;
+		case 'h':
+			esettings.cx--;
+			break;
+		case 'j':
+			esettings.cy--;
+			break;
+		case 'k':
+			esettings.cy++;
+			break;
+		case 'l':
+			esettings.cx++;
 			break;
 	}
 }
@@ -182,6 +233,9 @@ int get_window_size(unsigned int *rows, unsigned int *cols) {
 }
 
 void init() {
+	esettings.cx = 1;
+	esettings.cy = 0;
+
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
 	clear_screen();
