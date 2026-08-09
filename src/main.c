@@ -1,24 +1,90 @@
+#include <asm-generic/ioctls.h>
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
+#include <string.h>
 
 #define TRUE 1
+
+// e is idiomatic for editor
+
+struct editorConfig {
+	struct termios orig_termios;
+	unsigned int ws_col;
+	unsigned int ws_row;
+};
+
+struct editorConfig esettings;
+
+struct str {
+	char *buf;
+	unsigned int len; // Excludes null terminating character
+};
+
+int str_init(struct str* self) {
+	if (self == NULL) return -1;
+	self->buf = NULL;
+	self->len = 0;
+	return 0;
+}
+
+int str_append(struct str* self, const char *s, unsigned int len) {
+	/// Appends string s 
+	/// Uses given length (Excluding null terminating character)
+	if (self == NULL) return -1;
+	if (s == NULL || len <= 0) return 0;
+
+	char* newBuf = realloc(self->buf, self->len+len+1);
+	if (newBuf == NULL) return -1;
+
+	memcpy(&newBuf[self->len], s, len);
+	self->buf = newBuf;
+	self->len += len;
+	self->buf[self->len] = '\0';
+
+	return 0;
+}
+
+void str_free(struct str* self) {
+	free(self->buf);
+}
 
 /* KEYS */
 #define CTRL_KEY(k) ((k) & 0x1f)
 
-struct termios orig_termios;
+
+void edraw_rows() {
+	for (unsigned int i = 0; i < esettings.ws_row; i++) {
+		write(STDOUT_FILENO, "~", 1);
+		if (i < esettings.ws_row-1) {
+			write(STDOUT_FILENO, "\r\n", 2);
+		}
+	}
+}
+
+void clear_screen() {
+	write(STDOUT_FILENO, "\x1b[2J", 4);
+	write(STDOUT_FILENO, "\x1b[H", 3);
+}
+
+void erefresh_screen() {
+	clear_screen();
+	edraw_rows();
+	write(STDOUT_FILENO, "\x1b[H", 3);
+}
 
 void panic(const char *s) {
+	clear_screen();
 	perror(s);
 	exit(1);
 }
 
 void disableRawMode() {
-	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&orig_termios) == -1) {
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&esettings.orig_termios) == -1) {
 		panic("tcsetattr");
 	}
 }
@@ -26,10 +92,10 @@ void disableRawMode() {
 void enableRawMode() {
 	// Save default settings
 	// Apply old terminal settings when program
-	if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) panic("tcgetattr");
+	if (tcgetattr(STDIN_FILENO, &esettings.orig_termios) == -1) panic("tcgetattr");
 	atexit(disableRawMode);
 
-	struct termios raw = orig_termios;
+	struct termios raw = esettings.orig_termios;
 
 	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
 	raw.c_oflag &= ~(OPOST);
@@ -46,6 +112,7 @@ char get_key() {
 	char c = '\0';
 	int8_t res = read(STDIN_FILENO, &c, 1);
 
+	// Catch read errors (If standard input is not terminal input)
 	if (res < 0 && errno != EAGAIN) {
 		panic("read");
 	}
@@ -57,6 +124,7 @@ void process_keypress(char c) {
 	switch (c) {
 		case CTRL_KEY('c'):
 		case 'q':
+			clear_screen();
 			exit(0);
 			break;
 	}
@@ -72,10 +140,59 @@ void debug_keypress(char c) {
 	}
 }
 
-int main() {
+int get_cursor_position(unsigned int *rows, unsigned int *cols) {
+	// Query for cursor position
+	// ANSI \x1b[6n
+
+	if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
+
+	printf("\r\n");
+
+	// Get read the terminal input (cursor position)
+	// Read character for character until no input left
+	char buf[32];
+	unsigned int i = 0;
+	while (i < sizeof(buf)-1) {
+		if (read(STDIN_FILENO, &buf[i], 1) != 1) break;
+		if (buf[i] == 'R' || buf[i] == 'h') break;
+		i++;
+	}
+	buf[i] = '\0';
+
+	if (buf[0] != '\x1b' || buf[1] != '[') return -1;
+
+	// Parse the cursor positions out 
+	if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
+
+	return 0;
+}
+
+int get_window_size(unsigned int *rows, unsigned int *cols) {
+	struct winsize ws;
+
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+		// Fall back 
+		if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12) return -1;
+		return get_cursor_position(rows, cols);
+	}
+
+	*cols = ws.ws_col;
+	*rows = ws.ws_row;
+	return 0;
+}
+
+void init() {
 	enableRawMode();
+	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
+	clear_screen();
+}
+
+
+int main() {
+	init();
 
 	while (TRUE) {
+		erefresh_screen();
 		char c = get_key();
 		debug_keypress(c);
 		process_keypress(c);
