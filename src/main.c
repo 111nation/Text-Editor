@@ -14,6 +14,18 @@
 
 // e is idiomatic for editor
 
+enum editorKey {
+	ARROW_LEFT = 1000,
+	ARROW_UP,
+	ARROW_DOWN,
+	ARROW_RIGHT,
+	DEL_KEY,
+	PAGE_UP,
+	PAGE_DOWN,
+	HOME_KEY, 
+	END_KEY,
+};
+
 struct editorConfig {
 	struct termios orig_termios;
 	unsigned int ws_col, ws_row;
@@ -147,36 +159,113 @@ void enableRawMode() {
 	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&raw) == -1) panic("tcgetattr");
 }
 
-char get_key() {
+int get_key() {
 	char c = '\0';
-	int8_t res = read(STDIN_FILENO, &c, 1);
+	ssize_t res = read(STDIN_FILENO, &c, 1);
 
 	// Catch read errors (If standard input is not terminal input)
 	if (res < 0 && errno != EAGAIN) {
 		panic("read");
+		return c;
+	}
+
+	if (c == '\x1b') {
+		// Capture special keys -> Arrow keys
+		char special[3];
+
+		if (read(STDIN_FILENO, &special[0], 1) != 1) return '\x1b';
+		if (read(STDIN_FILENO, &special[1], 1) != 1) return '\x1b';
+
+		if (special[0] == '[') {
+			switch (special[1]) {
+				case 'A': return ARROW_UP;
+				case 'B': return ARROW_DOWN;
+				case 'C': return ARROW_RIGHT;
+				case 'D': return ARROW_LEFT;
+				case 'H': return HOME_KEY;
+				case 'F': return END_KEY;
+			}
+
+			if (special[1] >= '0' && special[1] <= '9'){
+				if (read(STDIN_FILENO, &special[2], 1) != 1) return '\x1b';
+				if (special[2] != '~') return '\x1b';
+				switch (special[1]) {
+					case '1': case '7': return HOME_KEY;
+					case '4': case '8': return END_KEY;
+					case '3': return DEL_KEY;
+					case '5': return PAGE_UP;
+					case '6': return PAGE_DOWN;
+				}
+			} 
+		} else if (special[0] == 'O') {
+			switch (special[1]) {
+				case 'H': return HOME_KEY;
+				case 'F': return END_KEY;
+			}
+		}
+
+
+		return '\x1b';
 	}
 
 	return c;
 }
 
-void process_keypress(char c) {
+static inline int clamp(int a, int min, int max) {
+	if (a < min) return min;
+	if (a > max) return max;
+	return a;
+}
+
+void move_cursor(int key) {
+	switch (key) {
+		case ARROW_LEFT:
+			esettings.cx--;
+			break;
+		case ARROW_UP:
+			esettings.cy--;
+			break;
+		case ARROW_DOWN:
+			esettings.cy++;
+			break;
+		case ARROW_RIGHT:
+			esettings.cx++;
+			break;
+	}
+
+	// Bounds
+	esettings.cx = clamp(esettings.cx, 0, esettings.ws_col);
+	esettings.cy = clamp(esettings.cy, 0, esettings.ws_row);
+}
+
+void process_keypress(int c) {
 	switch (c) {
 		case CTRL_KEY('c'):
 		case 'q':
 			clear_screen();
 			exit(0);
 			break;
-		case 'h':
-			esettings.cx--;
+
+		// NAVIAGATION
+		case ARROW_UP:
+		case ARROW_DOWN:
+		case ARROW_LEFT:
+		case ARROW_RIGHT:
+			move_cursor(c);
 			break;
-		case 'j':
-			esettings.cy--;
+		
+		case HOME_KEY:
+			esettings.cx = 0;
 			break;
-		case 'k':
-			esettings.cy++;
+		case END_KEY:
+			esettings.cx = esettings.ws_col;
 			break;
-		case 'l':
-			esettings.cx++;
+
+		case PAGE_UP:
+			esettings.cy = 0;
+			break;
+		case PAGE_DOWN:
+			esettings.cy = esettings.ws_row;
 			break;
 	}
 }
@@ -247,7 +336,7 @@ int main() {
 
 	while (TRUE) {
 		erefresh_screen();
-		char c = get_key();
+		int c = get_key();
 		debug_keypress(c);
 		process_keypress(c);
 	}
