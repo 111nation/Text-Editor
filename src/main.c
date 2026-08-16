@@ -1,14 +1,18 @@
-#include <asm-generic/ioctls.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <string.h>
 
 #define VERSION "0.0.1"
+
+#define _BSD_SOURCE
+#define _GNU_SOURCE
 
 #define TRUE 1
 
@@ -26,10 +30,17 @@ enum editorKey {
 	END_KEY,
 };
 
+typedef struct erow { // Single row data
+	int size;
+	char *chars;
+} erow;
+
 struct editorConfig {
-	struct termios orig_termios;
-	unsigned int ws_col, ws_row;
 	unsigned int cx, cy;
+	unsigned int ws_col, ws_row;
+	int numrows;
+	erow* row;
+	struct termios orig_termios;
 };
 
 struct editorConfig esettings;
@@ -73,23 +84,31 @@ void str_free(str* self) {
 
 void edraw_rows(str* buf) {
 	for (unsigned int i = 0; i < esettings.ws_row; i++) {
+		if (i >= esettings.numrows) { 
+			// Display empty space
+			if (esettings.numrows == 0 && i == esettings.ws_row/2) {
+				char welcome[80];
+				int len = snprintf(welcome, sizeof(welcome), "Editor 1975 -- version %s", VERSION);
 
-		if (i == esettings.ws_row/2) {
-			char welcome[80];
-			int len = snprintf(welcome, sizeof(welcome), "Editor 1975 -- version %s", VERSION);
+				if (len > esettings.ws_col) len = esettings.ws_col;
 
-			if (len > esettings.ws_col) len = esettings.ws_col;
+				int padding = (esettings.ws_col-len)/2;
+				if (padding) {
+					str_append(buf, "~", 1);
+					padding--;
+				}
 
-			int padding = (esettings.ws_col-len)/2;
-			if (padding) {
+				while (padding--) str_append(buf, " ", 1);
+				str_append(buf, welcome, len);
+			} else {
 				str_append(buf, "~", 1);
-				padding--;
 			}
-
-			while (padding--) str_append(buf, " ", 1);
-			str_append(buf, welcome, len);
 		} else {
-			str_append(buf, "~", 1);
+			// Display file 
+			int len = esettings.row[i].size;
+			if (len > esettings.ws_col) len = esettings.ws_col; // Truncate
+			str_append(buf, " ", 1);
+			str_append(buf, esettings.row[i].chars, len);
 		}
 
 		str_append(buf, "\x1b[K", 3);
@@ -115,7 +134,6 @@ void erefresh_screen() {
 	str_append(&buf, "\x1b[H", 3);
 
 	edraw_rows(&buf);
-
 	// Move cursor back to original position
 	char temp[32];
 	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", esettings.cy+1, esettings.cx+1);
@@ -234,7 +252,7 @@ void move_cursor(int key) {
 	}
 
 	// Bounds
-	esettings.cx = clamp(esettings.cx, 0, esettings.ws_col);
+	esettings.cx = clamp(esettings.cx, 2, esettings.ws_col);
 	esettings.cy = clamp(esettings.cy, 0, esettings.ws_row);
 }
 
@@ -321,9 +339,43 @@ int get_window_size(unsigned int *rows, unsigned int *cols) {
 	return 0;
 }
 
+/** File I/O **/
+void append_row(char* s, size_t len) {
+	esettings.row = realloc(esettings.row, sizeof(erow) * (esettings.numrows+1));
+
+	int row = esettings.numrows;
+	esettings.row[row].size = len;
+	esettings.row[row].chars = malloc(len+1);
+	memcpy(esettings.row[row].chars, s, len);
+	esettings.row[row].chars[len] = '\0';
+	esettings.numrows++;
+}
+
+void open(char* filename) {
+	FILE *fp = fopen(filename, "r");
+	if (!fp) panic("fopen");
+
+	char *line = NULL;
+	size_t linecap = 0;
+	ssize_t len;
+	while((len = getline(&line, &linecap, fp)) != -1) {
+		// Remove Trailing '\n' and '\r'
+		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) len--;
+		append_row(line, len);
+	}
+
+	free(line);
+	fclose(fp);
+}
+
+/** Initialization **/
+
+
 void init() {
-	esettings.cx = 1;
+	esettings.cx = 2;
 	esettings.cy = 0;
+	esettings.numrows = 0;
+	esettings.row = NULL;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
@@ -331,8 +383,11 @@ void init() {
 }
 
 
-int main() {
+int main(int argc, char* argv[]) {
 	init();
+	if (argc >= 2) {
+		open(argv[1]);
+	}
 
 	while (TRUE) {
 		erefresh_screen();
