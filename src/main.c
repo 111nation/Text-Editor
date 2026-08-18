@@ -10,6 +10,8 @@
 #include <string.h>
 
 #define VERSION "0.0.1"
+#define LEFT_PADDING 3
+#define TAB_STOP 4
 
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -32,23 +34,36 @@ enum editorKey {
 
 typedef struct erow { // Single row data
 	int size;
+	int rsize;
 	char *chars;
+	char *render;
 } erow;
 
 struct editorConfig {
 	unsigned int cx, cy;
+	unsigned int rx;
 	unsigned int ws_col, ws_row;
 	int numrows;
+	int rowoff;
+	int coloff;
 	erow* row;
 	struct termios orig_termios;
 };
 
 struct editorConfig esettings;
 
+
+/** String Handling **/
 typedef struct {
 	char *buf;
 	unsigned int len; // Excludes null terminating character
 } str;
+
+static inline int clamp(int a, int min, int max) {
+	if (a < min) return min;
+	if (a > max) return max;
+	return a;
+}
 
 int str_init(str* self) {
 	if (self == NULL) return -1;
@@ -78,13 +93,14 @@ void str_free(str* self) {
 	free(self->buf);
 }
 
-/* KEYS */
+/*** Keys ***/
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 
 void edraw_rows(str* buf) {
 	for (unsigned int i = 0; i < esettings.ws_row; i++) {
-		if (i >= esettings.numrows) { 
+		int filerow = i + esettings.rowoff;
+		if (filerow >= esettings.numrows) { 
 			// Display empty space
 			if (esettings.numrows == 0 && i == esettings.ws_row/2) {
 				char welcome[80];
@@ -105,10 +121,12 @@ void edraw_rows(str* buf) {
 			}
 		} else {
 			// Display file 
-			int len = esettings.row[i].size;
-			if (len > esettings.ws_col) len = esettings.ws_col; // Truncate
-			str_append(buf, " ", 1);
-			str_append(buf, esettings.row[i].chars, len);
+			int len = esettings.row[filerow].rsize - esettings.coloff;
+			if (len < 0) len = 0;
+			if (len > esettings.ws_col-LEFT_PADDING) len = esettings.ws_col-LEFT_PADDING; // Truncate
+			int padding = LEFT_PADDING;
+			while (padding--) str_append(buf, " ", 1);
+			str_append(buf, &esettings.row[filerow].render[esettings.coloff], len);
 		}
 
 		str_append(buf, "\x1b[K", 3);
@@ -125,7 +143,77 @@ void clear_screen() {
 	write(STDOUT_FILENO, "\x1b[?25h", 6);	
 }
 
+/** Row Operations **/
+int row_cx_to_rx(erow *row, int cx) {
+	int rx = 0;
+	for (int i = 0; i < cx; i++) {
+		if (row->chars[i] == '\t') {
+			rx += (TAB_STOP-1) - (rx % TAB_STOP);
+		}
+
+		rx++;
+	}
+	return rx;
+}
+
+void update_row(erow *row) {
+	int tabs = 0;
+	for (int j = 0; j < row->size; j++) {
+		if (row->chars[j] == '\t') tabs++;
+	}
+
+	free(row->render);
+	row->render = malloc(row->size+ tabs*(TAB_STOP-1) +1); // Allocate for space substitutes for tabs
+
+	int index = 0;
+	for (int j = 0; j < row->size; j++) {
+
+		if (row->chars[j] == '\t') {
+			row->render[index++]  = ' ';
+			while (index % TAB_STOP != 0) row->render[index++] = ' ';
+			// Only use 8 spaces at a time for ONE tab
+			continue;
+		}
+
+		row->render[index++] = row->chars[j];
+	}
+	row->render[index] = '\0';
+	row->rsize = index;
+}
+
+
+
+void escroll() {
+	esettings.rx = 0;
+	if (esettings.cy < esettings.numrows) {
+		esettings.rx = row_cx_to_rx(&esettings.row[esettings.cy], esettings.cx);
+	}
+
+	// Vertical Scrolling 
+	// Scroll Up
+	if (esettings.cy < esettings.rowoff) {
+		esettings.rowoff = esettings.cy;
+	}
+
+	// Scroll Down
+	if (esettings.cy >= esettings.rowoff + esettings.ws_row) {
+		esettings.rowoff = esettings.cy - esettings.ws_row + 1;
+	}
+
+	// Horizontal Scrolling 
+	// Scroll Left
+	if (esettings.rx < esettings.coloff) {
+		esettings.coloff = esettings.rx;
+	}
+
+	if (esettings.rx >= esettings.coloff + esettings.ws_col) {
+		esettings.coloff = esettings.rx - esettings.ws_col + 1;
+	}
+}
+
 void erefresh_screen() {
+	escroll();
+
 	str buf;
 	str_init(&buf);
 
@@ -136,7 +224,9 @@ void erefresh_screen() {
 	edraw_rows(&buf);
 	// Move cursor back to original position
 	char temp[32];
-	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", esettings.cy+1, esettings.cx+1);
+	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", 
+			(esettings.cy - esettings.rowoff)+1,
+		 	(esettings.rx - esettings.coloff)+1 + LEFT_PADDING);
 	str_append(&buf, temp, strlen(temp));
 
 	str_append(&buf, "\x1b[?25h", 6);	 // Unhide cursor
@@ -229,16 +319,20 @@ int get_key() {
 	return c;
 }
 
-static inline int clamp(int a, int min, int max) {
-	if (a < min) return min;
-	if (a > max) return max;
-	return a;
+int static inline curr_row() {
+	return clamp(esettings.cy, 0, esettings.numrows);
 }
 
 void move_cursor(int key) {
 	switch (key) {
 		case ARROW_LEFT:
-			esettings.cx--;
+			// Go to previous line
+			if (esettings.cx == 0 && esettings.cy > 0) {
+				esettings.cy--;
+				esettings.cx = esettings.row[curr_row()].size;
+			} else {
+				esettings.cx--;
+			}
 			break;
 		case ARROW_UP:
 			esettings.cy--;
@@ -246,14 +340,21 @@ void move_cursor(int key) {
 		case ARROW_DOWN:
 			esettings.cy++;
 			break;
-		case ARROW_RIGHT:
-			esettings.cx++;
+		case ARROW_RIGHT: 
+			if (esettings.cx >= esettings.row[curr_row()].size && 
+					esettings.cy < esettings.numrows) {
+				esettings.cy++;
+				esettings.cx = 0;
+			} else {
+				esettings.cx++;
+			}
+
 			break;
 	}
 
 	// Bounds
-	esettings.cx = clamp(esettings.cx, 2, esettings.ws_col);
-	esettings.cy = clamp(esettings.cy, 0, esettings.ws_row);
+	esettings.cx = clamp(esettings.cx, 0, esettings.row[curr_row()].size);
+	esettings.cy = clamp(esettings.cy, 0, esettings.numrows);
 }
 
 void process_keypress(int c) {
@@ -297,6 +398,8 @@ void debug_keypress(char c) {
 		printf("'%c' pressed with code '%i'\r\n", c, c);
 	}
 }
+
+/** Screen Output ***/
 
 int get_cursor_position(unsigned int *rows, unsigned int *cols) {
 	// Query for cursor position
@@ -348,7 +451,12 @@ void append_row(char* s, size_t len) {
 	esettings.row[row].chars = malloc(len+1);
 	memcpy(esettings.row[row].chars, s, len);
 	esettings.row[row].chars[len] = '\0';
-	esettings.numrows++;
+	
+	esettings.row[row].rsize = 0;
+	esettings.row[row].render = NULL;
+	update_row(&esettings.row[row]);
+
+	++esettings.numrows;
 }
 
 void open(char* filename) {
@@ -372,10 +480,13 @@ void open(char* filename) {
 
 
 void init() {
-	esettings.cx = 2;
+	esettings.cx = 0;
 	esettings.cy = 0;
+	esettings.rowoff = 0;
+	esettings.coloff = 0;
 	esettings.numrows = 0;
 	esettings.row = NULL;
+	esettings.rx = 0;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
@@ -392,7 +503,6 @@ int main(int argc, char* argv[]) {
 	while (TRUE) {
 		erefresh_screen();
 		int c = get_key();
-		debug_keypress(c);
 		process_keypress(c);
 	}
 
