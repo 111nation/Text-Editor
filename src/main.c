@@ -47,6 +47,7 @@ struct editorConfig {
 	int rowoff; 					// Line number of file displayed first on screen 
 	int coloff;						// Character of current line first displayed on screen
 	erow* row;						// File row data
+	char * filename;				// File name
 	struct termios orig_termios;	// Terminal Settings
 };
 
@@ -209,6 +210,33 @@ void escroll() {
 	}
 }
 
+void edraw_status(str* buf) {
+	str_append(buf, "\x1b[7m", 4);
+
+	char status[80], rstatus[80];
+
+	int len = snprintf(status, sizeof(status), "%.20s - %d of %d lines",
+			esettings.filename ? esettings.filename : "[Empty Buffer]", 
+			esettings.cy+1, esettings.numrows); 
+	int rlen = snprintf(rstatus, sizeof(rstatus), "%d of %d lines",
+			esettings.cy + 1, esettings.numrows);
+
+	if (len > esettings.ws_col) len = esettings.ws_col;
+	str_append(buf, status, len);
+
+	while (len < esettings.ws_col) {
+		if (esettings.ws_col - len == rlen) {
+			str_append(buf, rstatus, rlen);
+			break;
+		}
+
+		str_append(buf, " ", 1);
+		++len;
+	}
+
+	str_append(buf, "\x1b[m", 3);
+}
+
 void erefresh_screen() {
 	escroll();
 
@@ -220,6 +248,7 @@ void erefresh_screen() {
 	str_append(&buf, "\x1b[H", 3);
 
 	edraw_rows(&buf);
+	edraw_status(&buf);
 	// Move cursor back to original position
 	char temp[32];
 	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", 
@@ -471,6 +500,9 @@ void append_row(char* s, size_t len) {
 }
 
 void open(char* filename) {
+	free(esettings.filename);
+	esettings.filename = strdup(filename);
+
 	FILE *fp = fopen(filename, "r");
 	if (!fp) panic("fopen");
 
@@ -498,6 +530,7 @@ void init() {
 	esettings.numrows = 0;
 	esettings.row = NULL;
 	esettings.rx = 0;
+	esettings.filename = NULL;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
