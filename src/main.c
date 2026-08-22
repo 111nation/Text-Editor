@@ -40,14 +40,14 @@ typedef struct erow { // Single row data
 } erow;
 
 struct editorConfig {
-	unsigned int cx, cy;
-	unsigned int rx;
-	unsigned int ws_col, ws_row;
-	int numrows;
-	int rowoff;
-	int coloff;
-	erow* row;
-	struct termios orig_termios;
+	unsigned int cx, cy; 			// Cursor position in file
+	unsigned int rx; 				// Rendered cursor position in rendered file
+	unsigned int ws_col, ws_row;	// Screen dimensions
+	int numrows;					// Number of rows in file
+	int rowoff; 					// Line number of file displayed first on screen 
+	int coloff;						// Character of current line first displayed on screen
+	erow* row;						// File row data
+	struct termios orig_termios;	// Terminal Settings
 };
 
 struct editorConfig esettings;
@@ -130,9 +130,7 @@ void edraw_rows(str* buf) {
 		}
 
 		str_append(buf, "\x1b[K", 3);
-		if (i < esettings.ws_row-1) {
-			str_append(buf, "\r\n", 2);
-		}
+		str_append(buf, "\r\n", 2);
 	}
 }
 
@@ -377,15 +375,28 @@ void process_keypress(int c) {
 			esettings.cx = 0;
 			break;
 		case END_KEY:
-			esettings.cx = esettings.ws_col;
+			esettings.cx = esettings.row[curr_row()].size;
 			break;
 
 		case PAGE_UP:
-			esettings.cy = 0;
+		case PAGE_DOWN: {
+
+			int offset = esettings.cy - esettings.rowoff;
+			int direction = (c == PAGE_UP) ? -1 : 1;
+
+			esettings.rowoff += esettings.ws_row * direction;
+
+			esettings.rowoff = clamp(esettings.rowoff, 0, esettings.numrows-esettings.ws_row+1);
+
+			esettings.cy = esettings.rowoff;
+
+
+			offset = clamp(offset, 0, esettings.numrows-esettings.rowoff-1);
+			while (offset > 0 && offset--) move_cursor(ARROW_DOWN);
+
+
 			break;
-		case PAGE_DOWN:
-			esettings.cy = esettings.ws_row;
-			break;
+		}
 	}
 }
 
@@ -490,6 +501,7 @@ void init() {
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
+	esettings.ws_row -= 1;
 	clear_screen();
 }
 
