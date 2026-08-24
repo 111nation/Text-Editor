@@ -3,15 +3,18 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <string.h>
+#include <time.h>
 
 #define VERSION "0.0.1"
 #define LEFT_PADDING 3
 #define TAB_STOP 4
+#define STATUS_TIME 5
 
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -48,6 +51,8 @@ struct editorConfig {
 	int coloff;						// Character of current line first displayed on screen
 	erow* row;						// File row data
 	char * filename;				// File name
+	char statusmsg[80];				// Status bar message
+	time_t statusmsg_time;			// Time created
 	struct termios orig_termios;	// Terminal Settings
 };
 
@@ -210,16 +215,33 @@ void escroll() {
 	}
 }
 
+void eset_message(const char *fmt, ...) {
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(esettings.statusmsg, sizeof(esettings.statusmsg), fmt, ap);
+	va_end(ap);
+
+	esettings.statusmsg_time = time(NULL); 
+}
+
+void edraw_message(str* buf) {
+	str_append(buf, "\x1b[K", 3);
+	int len = clamp(strlen(esettings.statusmsg), 0, esettings.ws_col);
+	time_t curr_time = time(NULL);
+	if (len && (curr_time - esettings.statusmsg_time < STATUS_TIME)) {
+		str_append(buf, esettings.statusmsg, len);
+	}
+}
+
 void edraw_status(str* buf) {
 	str_append(buf, "\x1b[7m", 4);
 
 	char status[80], rstatus[80];
 
 	int len = snprintf(status, sizeof(status), "%.20s - %d of %d lines",
-			esettings.filename ? esettings.filename : "[Empty Buffer]", 
+			esettings.filename ? esettings.filename : "[Empty File]", 
 			esettings.cy+1, esettings.numrows); 
-	int rlen = snprintf(rstatus, sizeof(rstatus), "%d of %d lines",
-			esettings.cy + 1, esettings.numrows);
+	int rlen = snprintf(rstatus, sizeof(rstatus), "");
 
 	if (len > esettings.ws_col) len = esettings.ws_col;
 	str_append(buf, status, len);
@@ -235,6 +257,7 @@ void edraw_status(str* buf) {
 	}
 
 	str_append(buf, "\x1b[m", 3);
+	str_append(buf, "\r\n", 3);
 }
 
 void erefresh_screen() {
@@ -249,6 +272,7 @@ void erefresh_screen() {
 
 	edraw_rows(&buf);
 	edraw_status(&buf);
+	edraw_message(&buf);
 	// Move cursor back to original position
 	char temp[32];
 	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", 
@@ -386,8 +410,7 @@ void move_cursor(int key) {
 
 void process_keypress(int c) {
 	switch (c) {
-		case CTRL_KEY('c'):
-		case 'q':
+		case CTRL_KEY('q'):
 			clear_screen();
 			exit(0);
 			break;
@@ -531,10 +554,12 @@ void init() {
 	esettings.row = NULL;
 	esettings.rx = 0;
 	esettings.filename = NULL;
+	esettings.statusmsg[0] = '\0';
+	esettings.statusmsg_time = 0;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
-	esettings.ws_row -= 1;
+	esettings.ws_row -= 2;
 	clear_screen();
 }
 
@@ -544,6 +569,8 @@ int main(int argc, char* argv[]) {
 	if (argc >= 2) {
 		open(argv[1]);
 	}
+
+	eset_message("Enter <Ctrl-Q> to quit");
 
 	while (TRUE) {
 		erefresh_screen();
