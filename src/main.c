@@ -16,6 +16,7 @@
 #define LEFT_PADDING 3
 #define TAB_STOP 4
 #define STATUS_TIME 5
+#define QUIT_TIMES 1
 
 #define _BSD_SOURCE
 #define _GNU_SOURCE
@@ -53,6 +54,7 @@ struct editorConfig {
 	int rowoff; 					// Line number of file displayed first on screen 
 	int coloff;						// Character of current line first displayed on screen
 	erow* row;						// File row data
+	int dirty;						// Indicate if file has been modifed
 	char * filename;				// File name
 	char statusmsg[80];				// Status bar message
 	time_t statusmsg_time;			// Time created
@@ -205,6 +207,7 @@ void append_row(char* s, size_t len) {
 	update_row(&esettings.row[row]);
 
 	++esettings.numrows;
+	++esettings.dirty;
 }
 
 void erow_insert_char(erow *row, int i, int c) {
@@ -214,6 +217,15 @@ void erow_insert_char(erow *row, int i, int c) {
 	row->size++;
 	row->chars[i] = c;
 	update_row(row);
+	esettings.dirty++;
+}
+
+void erow_del_char(erow *row, int i) {
+	if (i < 0 || i >= row->size) return;
+	memmove(&row->chars[i], &row->chars[i+1], row->size-i);
+	row->size--;
+	update_row(row);
+	esettings.dirty++;
 }
 
 /*** Editor Operations ***/
@@ -224,6 +236,14 @@ void einsert_char (int c) {
 
 	erow_insert_char(&esettings.row[esettings.cy], esettings.cx, c);
 	esettings.cx++;
+}
+
+void edel_char() {
+	if (esettings.cy == esettings.numrows && esettings.cx > 0) return;
+
+	erow *row = &esettings.row[esettings.cy];
+	erow_del_char(row, esettings.cx-1);
+	--esettings.cx;
 }
 
 void escroll() {
@@ -275,11 +295,15 @@ void edraw_message(str* buf) {
 void edraw_status(str* buf) {
 	str_append(buf, "\x1b[7m", 4);
 
-	char status[80], rstatus[80];
+	char status[80], rstatus[80], modified[20];
 
-	int len = snprintf(status, sizeof(status), "%.20s - %d of %d lines",
+	int mlen = snprintf(modified, sizeof(modified), "(%d bytes modified)", esettings.dirty);
+
+	int len = snprintf(status, sizeof(status), "%s %.20s - %d of %d lines",
+			esettings.dirty ? modified : "",
 			esettings.filename ? esettings.filename : "[Empty File]", 
-			esettings.cy+1, esettings.numrows); 
+			esettings.cy+1, esettings.numrows);
+
 	int rlen = snprintf(rstatus, sizeof(rstatus), "");
 
 	if (len > esettings.ws_col) len = esettings.ws_col;
@@ -499,6 +523,7 @@ void eopen(char* filename) {
 
 	free(line);
 	fclose(fp);
+	esettings.dirty = 0;
 }
 
 void esave() {
@@ -528,6 +553,7 @@ void esave() {
 
 	close(fd);
 	free(buf);
+	esettings.dirty = 0;
 	return;
 
 	cleanup_fd:
@@ -540,6 +566,8 @@ void esave() {
 
 
 void process_keypress(int c) {
+	static int quit_times = QUIT_TIMES;
+
 	switch (c) {
 		case NO_KEY_PRESS:
 			return;
@@ -549,6 +577,13 @@ void process_keypress(int c) {
 			break;
 
 		case CTRL_KEY('q'):
+			if (esettings.dirty && quit_times > 0) {
+				eset_message("WARNING!!! About to discard changes." 
+						" Press Ctrl-Q again to force quit...", quit_times);
+				--quit_times;
+				return;
+			}
+
 			clear_screen();
 			exit(0);
 			break;
@@ -560,7 +595,10 @@ void process_keypress(int c) {
 		case BACKSPACE:
 		case CTRL_KEY('h'):
 		case DEL_KEY:
-			// TODO
+			if (esettings.cx >= esettings.row[curr_row()].size && c == DEL_KEY) break;
+
+			if (c == DEL_KEY) move_cursor(ARROW_RIGHT);
+			edel_char();
 			break;
 
 		// Navigation
@@ -607,6 +645,8 @@ void process_keypress(int c) {
 			einsert_char(c);
 			break;
 	}
+
+	quit_times = QUIT_TIMES; // Reset quit times if any other key pressed
 }
 
 void debug_keypress(char c) {
@@ -674,6 +714,7 @@ void init() {
 	esettings.filename = NULL;
 	esettings.statusmsg[0] = '\0';
 	esettings.statusmsg_time = 0;
+	esettings.dirty = 0;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
