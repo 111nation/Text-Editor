@@ -33,6 +33,7 @@ enum editorKey {
 	PAGE_DOWN,
 	HOME_KEY, 
 	END_KEY,
+	NO_KEY_PRESS,
 };
 
 typedef struct erow { // Single row data
@@ -161,6 +162,9 @@ int row_cx_to_rx(erow *row, int cx) {
 }
 
 void update_row(erow *row) {
+	/// Recieves row to be updated and 
+	/// updates a single row's 
+	/// render to be displayed later
 	int tabs = 0;
 	for (int j = 0; j < row->size; j++) {
 		if (row->chars[j] == '\t') tabs++;
@@ -185,7 +189,40 @@ void update_row(erow *row) {
 	row->rsize = index;
 }
 
+void append_row(char* s, size_t len) {
+	esettings.row = realloc(esettings.row, sizeof(erow) * (esettings.numrows+1));
 
+	int row = esettings.numrows;
+	esettings.row[row].size = len;
+	esettings.row[row].chars = malloc(len+1);
+	memcpy(esettings.row[row].chars, s, len);
+	esettings.row[row].chars[len] = '\0';
+	
+	esettings.row[row].rsize = 0;
+	esettings.row[row].render = NULL;
+	update_row(&esettings.row[row]);
+
+	++esettings.numrows;
+}
+
+void erow_insert_char(erow *row, int i, int c) {
+	if (i < 0 || i > row->size) i = row->size;
+	row->chars = realloc(row->chars, row->size+2);
+	memmove(&row->chars[i+1], &row->chars[i], row->size-i+1);
+	row->size++;
+	row->chars[i] = c;
+	update_row(row);
+}
+
+/*** Editor Operations ***/
+void einsert_char (int c) {
+	if (esettings.cy == esettings.numrows) {
+		append_row("", 0);
+	}
+
+	erow_insert_char(&esettings.row[esettings.cy], esettings.cx, c);
+	esettings.cx++;
+}
 
 void escroll() {
 	esettings.rx = 0;
@@ -322,10 +359,14 @@ int get_key() {
 	char c = '\0';
 	ssize_t res = read(STDIN_FILENO, &c, 1);
 
+	if (res == 0) {
+		return NO_KEY_PRESS;
+	}
+
 	// Catch read errors (If standard input is not terminal input)
 	if (res < 0 && errno != EAGAIN) {
 		panic("read");
-		return c;
+		return NO_KEY_PRESS;
 	}
 
 	if (c == '\x1b') {
@@ -410,17 +451,12 @@ void move_cursor(int key) {
 
 void process_keypress(int c) {
 	switch (c) {
+		case NO_KEY_PRESS:
+			return;
+
 		case CTRL_KEY('q'):
 			clear_screen();
 			exit(0);
-			break;
-
-		// NAVIAGATION
-		case ARROW_UP:
-		case ARROW_DOWN:
-		case ARROW_LEFT:
-		case ARROW_RIGHT:
-			move_cursor(c);
 			break;
 		
 		case HOME_KEY:
@@ -449,6 +485,18 @@ void process_keypress(int c) {
 
 			break;
 		}
+
+		// NAVIAGATION
+		case ARROW_UP:
+		case ARROW_DOWN:
+		case ARROW_LEFT:
+		case ARROW_RIGHT:
+			move_cursor(c);
+			break;
+
+		default:
+			einsert_char(c);
+			break;
 	}
 }
 
@@ -505,22 +553,9 @@ int get_window_size(unsigned int *rows, unsigned int *cols) {
 	return 0;
 }
 
+
+
 /** File I/O **/
-void append_row(char* s, size_t len) {
-	esettings.row = realloc(esettings.row, sizeof(erow) * (esettings.numrows+1));
-
-	int row = esettings.numrows;
-	esettings.row[row].size = len;
-	esettings.row[row].chars = malloc(len+1);
-	memcpy(esettings.row[row].chars, s, len);
-	esettings.row[row].chars[len] = '\0';
-	
-	esettings.row[row].rsize = 0;
-	esettings.row[row].render = NULL;
-	update_row(&esettings.row[row]);
-
-	++esettings.numrows;
-}
 
 void open(char* filename) {
 	free(esettings.filename);
