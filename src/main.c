@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +25,7 @@
 // e is idiomatic for editor
 
 enum editorKey {
+	BACKSPACE = 127,
 	ARROW_LEFT = 1000,
 	ARROW_UP,
 	ARROW_DOWN,
@@ -416,6 +418,8 @@ int static inline curr_row() {
 }
 
 void move_cursor(int key) {
+	if (esettings.numrows <= 0) return;
+
 	switch (key) {
 		case ARROW_LEFT:
 			// Go to previous line
@@ -445,20 +449,121 @@ void move_cursor(int key) {
 	}
 
 	// Bounds
-	esettings.cx = clamp(esettings.cx, 0, esettings.row[curr_row()].size);
 	esettings.cy = clamp(esettings.cy, 0, esettings.numrows);
+
+	if (esettings.cy < esettings.numrows) {
+		esettings.cx = clamp(esettings.cx, 0, esettings.row[curr_row()].size);
+	} else {
+		esettings.cx = 0;
+	}
 }
+
+/** File I/O **/
+char* erows_to_string(int *buflen) {
+	// Count characters to store
+	int totlen = 0;
+	for (int i = 0; i < esettings.numrows; i++) {
+		totlen += esettings.row[i].size + 1;
+	}
+	*buflen = totlen;
+
+
+	// Store characters
+	char *buf = malloc(totlen);
+	char *p = buf;
+	for (int i = 0; i < esettings.numrows; i++) {
+		memcpy(p, esettings.row[i].chars, esettings.row[i].size);
+		p += esettings.row[i].size;
+		*p = '\n';
+		++p;
+	}
+
+	return buf;
+}
+
+void eopen(char* filename) {
+	free(esettings.filename);
+	esettings.filename = strdup(filename);
+
+	FILE *fp = fopen(filename, "r");
+	if (!fp) panic("fopen");
+
+	char *line = NULL;
+	size_t linecap = 0;
+	ssize_t len;
+	while((len = getline(&line, &linecap, fp)) != -1) {
+		// Remove Trailing '\n' and '\r'
+		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) len--;
+		append_row(line, len);
+	}
+
+	free(line);
+	fclose(fp);
+}
+
+void esave() {
+	if (esettings.filename == NULL) {
+		eset_message("No file buffer to write to!");
+		return;
+	}
+
+	int len;
+	char *buf = erows_to_string(&len);
+
+	int fd = open(esettings.filename, O_RDWR | O_CREAT, 0644);
+
+	if (fd == -1) {
+		goto cleanup_buf;
+	}
+
+	if (ftruncate(fd, len) == -1) {
+		goto cleanup_fd;
+	}
+
+	if (write(fd, buf, len) != len) {
+		goto cleanup_fd;
+	}
+
+	eset_message("%d bytes written to disk", len);
+
+	close(fd);
+	free(buf);
+	return;
+
+	cleanup_fd:
+		close(fd);
+	cleanup_buf:
+		free(buf);
+	
+	eset_message("Error Saving! I/O error: %s", strerror(errno));
+}
+
 
 void process_keypress(int c) {
 	switch (c) {
 		case NO_KEY_PRESS:
 			return;
 
+		case '\r':
+			// TODO 
+			break;
+
 		case CTRL_KEY('q'):
 			clear_screen();
 			exit(0);
 			break;
-		
+
+		case CTRL_KEY('s'):
+			esave();
+			break;
+
+		case BACKSPACE:
+		case CTRL_KEY('h'):
+		case DEL_KEY:
+			// TODO
+			break;
+
+		// Navigation
 		case HOME_KEY:
 			esettings.cx = 0;
 			break;
@@ -486,12 +591,16 @@ void process_keypress(int c) {
 			break;
 		}
 
-		// NAVIAGATION
 		case ARROW_UP:
 		case ARROW_DOWN:
 		case ARROW_LEFT:
 		case ARROW_RIGHT:
 			move_cursor(c);
+			break;
+
+		// Ignore Ctrl-l and Escape keys
+		case CTRL_KEY('l'):
+		case '\x1b':
 			break;
 
 		default:
@@ -553,33 +662,7 @@ int get_window_size(unsigned int *rows, unsigned int *cols) {
 	return 0;
 }
 
-
-
-/** File I/O **/
-
-void open(char* filename) {
-	free(esettings.filename);
-	esettings.filename = strdup(filename);
-
-	FILE *fp = fopen(filename, "r");
-	if (!fp) panic("fopen");
-
-	char *line = NULL;
-	size_t linecap = 0;
-	ssize_t len;
-	while((len = getline(&line, &linecap, fp)) != -1) {
-		// Remove Trailing '\n' and '\r'
-		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) len--;
-		append_row(line, len);
-	}
-
-	free(line);
-	fclose(fp);
-}
-
 /** Initialization **/
-
-
 void init() {
 	esettings.cx = 0;
 	esettings.cy = 0;
@@ -602,10 +685,10 @@ void init() {
 int main(int argc, char* argv[]) {
 	init();
 	if (argc >= 2) {
-		open(argv[1]);
+		eopen(argv[1]);
 	}
 
-	eset_message("Enter <Ctrl-Q> to quit");
+	eset_message("HELP: Ctrl-S to save | Ctrl-Q to quit");
 
 	while (TRUE) {
 		erefresh_screen();
