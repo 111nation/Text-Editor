@@ -1,6 +1,6 @@
-# Editor - Lightweight CLI Text Editor
+# Editor - Lightweight Terminal Text Editor
 
-**Editor** is an extremely simple-to-use CLI text editor. Written in C, it offers simplicity while being very responsive and performant. Editor was inspired by and is a derivative of [antirez's kilo editor](https://viewsourcecode.org/snaptoken/kilo/index.html).  
+**Editor** is an extremely simple-to-use terminal text editor. Written in C, it offers simplicity while being very responsive and performant. Editor was inspired by and is a derivative of [antirez's kilo editor](https://viewsourcecode.org/snaptoken/kilo/index.html).  
 
 ## Demo Video
 
