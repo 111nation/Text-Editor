@@ -193,21 +193,40 @@ void update_row(erow *row) {
 	row->rsize = index;
 }
 
-void append_row(char* s, size_t len) {
-	esettings.row = realloc(esettings.row, sizeof(erow) * (esettings.numrows+1));
+void insert_row(int i, char* s, size_t len) {
+	if (i < 0 || i > esettings.numrows) return;
 
-	int row = esettings.numrows;
-	esettings.row[row].size = len;
-	esettings.row[row].chars = malloc(len+1);
-	memcpy(esettings.row[row].chars, s, len);
-	esettings.row[row].chars[len] = '\0';
+	esettings.row = realloc(esettings.row, sizeof(erow) * (esettings.numrows+1));
+	memmove(&esettings.row[i+1], &esettings.row[i], sizeof(erow)*(esettings.numrows-i));
+
+	esettings.row[i].size = len;
+	esettings.row[i].chars = malloc(len+1);
+	memcpy(esettings.row[i].chars, s, len);
+	esettings.row[i].chars[len] = '\0';
 	
-	esettings.row[row].rsize = 0;
-	esettings.row[row].render = NULL;
-	update_row(&esettings.row[row]);
+	esettings.row[i].rsize = 0;
+	esettings.row[i].render = NULL;
+	update_row(&esettings.row[i]);
 
 	++esettings.numrows;
 	++esettings.dirty;
+}
+
+void efree_row(erow* row) {
+	free(row->render);
+	free(row->chars);
+}
+
+void edel_row(int i) {
+	if (i < 0 || i >= esettings.numrows) return;
+	
+	int removed_chars = esettings.row[i].size;
+
+	efree_row(&esettings.row[i]);
+	memmove(&esettings.row[i], &esettings.row[i+1], sizeof(erow) * (esettings.numrows-i-1));
+	--esettings.numrows;
+
+	esettings.dirty+=removed_chars;
 }
 
 void erow_insert_char(erow *row, int i, int c) {
@@ -218,6 +237,15 @@ void erow_insert_char(erow *row, int i, int c) {
 	row->chars[i] = c;
 	update_row(row);
 	esettings.dirty++;
+}
+
+void erow_append_string(erow* row, char *s, size_t len) {
+	row->chars = realloc(row->chars, row->size + len + 1);
+	memcpy(&row->chars[row->size], s, len);
+	row->size += len;
+	row->chars[row->size] = '\0';
+	update_row(row);
+	esettings.dirty+=len;
 }
 
 void erow_del_char(erow *row, int i) {
@@ -231,19 +259,43 @@ void erow_del_char(erow *row, int i) {
 /*** Editor Operations ***/
 void einsert_char (int c) {
 	if (esettings.cy == esettings.numrows) {
-		append_row("", 0);
+		insert_row(esettings.numrows, "", 0);
 	}
 
 	erow_insert_char(&esettings.row[esettings.cy], esettings.cx, c);
 	esettings.cx++;
 }
 
+void einsert_new_line() {
+	if (esettings.cx == 0) {
+		insert_row(esettings.cy, "", 0);
+	} else {
+		erow *row = &esettings.row[esettings.cy];
+		insert_row(esettings.cy+1, &row->chars[esettings.cx], row->size-esettings.cx);
+		row = &esettings.row[esettings.cy];
+		row->size = esettings.cx;
+		row->chars[row->size] = '\0';
+		update_row(row);
+	}
+
+	++esettings.cy;
+	esettings.cx = 0;
+}
+
 void edel_char() {
-	if (esettings.cy == esettings.numrows && esettings.cx > 0) return;
+	if (esettings.cy == esettings.numrows) return;
+	if (esettings.cx == 0 && esettings.cy == 0) return;
 
 	erow *row = &esettings.row[esettings.cy];
-	erow_del_char(row, esettings.cx-1);
-	--esettings.cx;
+	if (esettings.cx > 0) {
+		erow_del_char(row, esettings.cx-1);
+		--esettings.cx;
+	} else {
+		esettings.cx = esettings.row[esettings.cy-1].size;
+		erow_append_string(&esettings.row[esettings.cy-1], row->chars, row->size);
+		edel_row(esettings.cy);
+		--esettings.cy;
+	}
 }
 
 void escroll() {
@@ -518,7 +570,7 @@ void eopen(char* filename) {
 	while((len = getline(&line, &linecap, fp)) != -1) {
 		// Remove Trailing '\n' and '\r'
 		while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) len--;
-		append_row(line, len);
+		insert_row(esettings.numrows, line, len);
 	}
 
 	free(line);
@@ -573,7 +625,7 @@ void process_keypress(int c) {
 			return;
 
 		case '\r':
-			// TODO 
+			einsert_new_line();
 			break;
 
 		case CTRL_KEY('q'):
