@@ -105,7 +105,7 @@ void str_free(str* self) {
 }
 
 /*** Prototypes ***/
-char* prompt(char* prompt);
+char* prompt(char* prompt, void (*callback)(char *, int));
 
 /*** Keys ***/
 #define CTRL_KEY(k) ((k) & 0x1f)
@@ -511,7 +511,7 @@ int static inline curr_row() {
 	return clamp(esettings.cy, 0, esettings.numrows);
 }
 
-char* prompt(char* prompt) {
+char* prompt(char* prompt, void (*callback)(char *, int)) {
 	/// Prompt user for input
 	/// Store input and process it for later
 
@@ -536,6 +536,7 @@ char* prompt(char* prompt) {
 		// ESCAPE - Cancel Prompt
 		if (c == '\x1b' || c == CTRL_KEY('q')) {
 			eset_message("");
+			if (callback) callback(buf, c);
 			free(buf);
 			buf = NULL;
 			break;
@@ -545,6 +546,7 @@ char* prompt(char* prompt) {
 		if (c == '\r') {
 			if (len <= 0) continue;
 			eset_message("");
+			if (callback) callback(buf, c);
 			break;					
 		} 
 
@@ -559,6 +561,8 @@ char* prompt(char* prompt) {
 			buf[len++] = c;
 			buf[len] = '\0';  // Null terminate: Buffer used every iteration
 		}
+
+		if (callback) callback(buf, c);
 	}
 	
 	// Move cursor back to original position
@@ -653,7 +657,7 @@ void eopen(char* filename) {
 
 void esave() {
 	if (esettings.filename == NULL) {
-		esettings.filename = prompt("Save file as:\t %s");
+		esettings.filename = prompt("Save file as:\t %s", NULL);
 		if (esettings.filename == NULL) {
 			eset_message("Save aborted");
 			return;	
@@ -693,22 +697,67 @@ void esave() {
 }
 
 /*** Find ***/
-void find() {
-	char *query = prompt("Search: %s");
-	if (query == NULL) return;
+void find_callback(char *query, int key) {
+	static int last_match = -1;
+	static int direction = 1;
 
+	if (key == '\r' || key == '\x1b') {
+		last_match = -1;
+		direction = 1;
+		return;
+	} 
+
+	if (key == ARROW_RIGHT || key == ARROW_DOWN) {
+		direction = 1;
+	} else if (key == ARROW_LEFT || key == ARROW_UP) {
+		direction = -1;
+	} else {
+		last_match = -1;
+		direction = 1;
+	}
+	
+	if (last_match == -1) direction = 1;
+	int current = last_match;
 	for (int i = 0; i < esettings.numrows; i++) {
-		erow* row = &esettings.row[i];
+		current += direction;
+
+		if (current == -1) {
+			current = esettings.numrows-1;
+		} else if (current == esettings.numrows) {
+			current = 0;
+		}
+
+		erow* row = &esettings.row[current];
 		char *match = strstr(row->render, query);
 		if (match) {
-			esettings.cy = i;
+			last_match = current;
+			esettings.cy = current;
 			esettings.cx = row_rx_to_cx(row, match-row->render);
 			esettings.rowoff = esettings.numrows;
 			break;
 		}
 	}
 
-	free(query);
+}
+
+void find() {
+	int saved_cx = esettings.cx;
+	int saved_cy = esettings.cy;
+	int saved_coloff = esettings.coloff;
+	int saved_rowoff = esettings.rowoff;
+
+	char *query = prompt("Search: %s (Navigate with Arrow Keys)", find_callback);
+
+	if (query) {
+		free(query);
+		return;
+	} 
+
+	// Search CANCELLED - Return user to original position
+	esettings.cx = saved_cx;
+	esettings.cy = saved_cy;
+	esettings.coloff = saved_coloff;
+	esettings.rowoff = saved_rowoff;
 }
 
 
@@ -793,6 +842,8 @@ void process_keypress(int c) {
 			break;
 
 		default:
+			// Reject Ctrl key combinations
+			if (c == (c & 0x1f)) break;
 			einsert_char(c);
 			break;
 	}
