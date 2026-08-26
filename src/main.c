@@ -104,6 +104,9 @@ void str_free(str* self) {
 	free(self->buf);
 }
 
+/*** Prototypes ***/
+char* prompt(char* prompt);
+
 /*** Keys ***/
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -493,6 +496,61 @@ int static inline curr_row() {
 	return clamp(esettings.cy, 0, esettings.numrows);
 }
 
+char* prompt(char* prompt) {
+	/// Prompt user for input
+	/// Store input and process it for later
+
+	size_t bufsize = 128;
+	char *buf = malloc(bufsize);
+
+	size_t len = 0;
+	buf[0] = '\0';
+	
+	while (1) {
+		eset_message(prompt, buf);
+		erefresh_screen();
+		
+		int c = get_key();
+		
+		// BACKSPACE
+		if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
+			if (len != 0) buf[--len] = '\0';	
+			continue;
+		}		
+
+		// ESCAPE - Cancel Prompt
+		if (c == '\x1b' || c == CTRL_KEY('q')) {
+			eset_message("");
+			free(buf);
+			buf = NULL;
+			break;
+		}
+
+		// ENTER - Submit
+		if (c == '\r') {
+			if (len <= 0) continue;
+			eset_message("");
+			break;					
+		} 
+
+		// KEY INPUT
+		if (!iscntrl(c) && c < 128) {
+			// User key input for prompt
+			if (len == bufsize-1) {
+				// Resize buffer if too small
+				bufsize *= 2;
+				buf = realloc(buf, bufsize);	
+			}
+			buf[len++] = c;
+			buf[len] = '\0';  // Null terminate: Buffer used every iteration
+		}
+	}
+	
+	// Move cursor back to original position
+	erefresh_screen();
+	return buf;
+}
+
 void move_cursor(int key) {
 	if (esettings.numrows <= 0) return;
 
@@ -580,8 +638,11 @@ void eopen(char* filename) {
 
 void esave() {
 	if (esettings.filename == NULL) {
-		eset_message("No file buffer to write to!");
-		return;
+		esettings.filename = prompt("Save file as:\t %s");
+		if (esettings.filename == NULL) {
+			eset_message("Save aborted");
+			return;	
+		}
 	}
 
 	int len;
