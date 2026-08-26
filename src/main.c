@@ -168,6 +168,21 @@ int row_cx_to_rx(erow *row, int cx) {
 	return rx;
 }
 
+int row_rx_to_cx(erow *row, int rx) {
+	int cur_rx = 0;
+	int cx;
+	for (int cx = 0; cx < row->size; cx++) {
+		if (row->chars[cx] == '\t') {
+			cur_rx += (TAB_STOP-1) - (cur_rx % TAB_STOP);
+		}
+
+		++cur_rx;
+
+		if (cur_rx > rx) return cx;
+	}
+	return cx;
+}
+
 void update_row(erow *row) {
 	/// Recieves row to be updated and 
 	/// updates a single row's 
@@ -677,6 +692,25 @@ void esave() {
 	eset_message("Error Saving! I/O error: %s", strerror(errno));
 }
 
+/*** Find ***/
+void find() {
+	char *query = prompt("Search: %s");
+	if (query == NULL) return;
+
+	for (int i = 0; i < esettings.numrows; i++) {
+		erow* row = &esettings.row[i];
+		char *match = strstr(row->render, query);
+		if (match) {
+			esettings.cy = i;
+			esettings.cx = row_rx_to_cx(row, match-row->render);
+			esettings.rowoff = esettings.numrows;
+			break;
+		}
+	}
+
+	free(query);
+}
+
 
 void process_keypress(int c) {
 	static int quit_times = QUIT_TIMES;
@@ -703,6 +737,10 @@ void process_keypress(int c) {
 
 		case CTRL_KEY('s'):
 			esave();
+			break;
+
+		case CTRL_KEY('f'):
+			find();
 			break;
 
 		case BACKSPACE:
@@ -842,7 +880,7 @@ int main(int argc, char* argv[]) {
 		eopen(argv[1]);
 	}
 
-	eset_message("HELP: Ctrl-S to save | Ctrl-Q to quit");
+	eset_message("HELP: Ctrl-S to save | Ctrl-Q to quit | Ctrl-F to search");
 
 	while (TRUE) {
 		erefresh_screen();
