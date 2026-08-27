@@ -701,29 +701,38 @@ void find_callback(char *query, int key) {
 	static int last_match = -1;
 	static int direction = 1;
 
+	if (strlen(query) == 0) {
+		last_match = -1;
+		return;
+	}
+
 	if (key == '\r' || key == '\x1b') {
 		last_match = -1;
 		direction = 1;
 		return;
 	} 
+	
+	int current;
 
 	if (key == ARROW_RIGHT || key == ARROW_DOWN) {
 		direction = 1;
+		current = last_match+1;
 	} else if (key == ARROW_LEFT || key == ARROW_UP) {
 		direction = -1;
+		current = last_match-1;
 	} else {
-		last_match = -1;
 		direction = 1;
+		current = last_match;
 	}
 	
 	if (last_match == -1) direction = 1;
-	int current = last_match;
-	for (int i = 0; i < esettings.numrows; i++) {
-		current += direction;
 
-		if (current == -1) {
+	for (int i = 0; i < esettings.numrows; i++) { 
+		// Iterate by # of lines in file
+		// Current doesn't necissarily start at the first line
+		if (current <= -1) {
 			current = esettings.numrows-1;
-		} else if (current == esettings.numrows) {
+		} else if (current >= esettings.numrows) {
 			current = 0;
 		}
 
@@ -736,8 +745,9 @@ void find_callback(char *query, int key) {
 			esettings.rowoff = esettings.numrows;
 			break;
 		}
+		
+		current += direction;
 	}
-
 }
 
 void find() {
@@ -746,7 +756,7 @@ void find() {
 	int saved_coloff = esettings.coloff;
 	int saved_rowoff = esettings.rowoff;
 
-	char *query = prompt("Search: %s (Navigate with Arrow Keys)", find_callback);
+	char *query = prompt("Search: %s", find_callback);
 
 	if (query) {
 		free(query);
