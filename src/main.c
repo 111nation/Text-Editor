@@ -67,6 +67,7 @@ struct editorSyntax {
 typedef struct erow { // Single row data
 	int index;
 	int size;
+	int indent_level;
 	int rsize;
 	char *chars;
 	char *render;
@@ -498,6 +499,8 @@ void update_row(erow *row) {
 		if (row->chars[j] == '\t') tabs++;
 	}
 
+	row->indent_level = tabs;
+
 	free(row->render);
 	row->render = malloc(row->size+ tabs*(TAB_STOP-1) +1); // Allocate for space substitutes for tabs
 
@@ -534,6 +537,9 @@ void insert_row(int i, char* s, size_t len) {
 	esettings.row[i].chars = malloc(len+1);
 	memcpy(esettings.row[i].chars, s, len);
 	esettings.row[i].chars[len] = '\0';
+
+	// Count leading tabs
+	esettings.row[i].indent_level = 0;
 	
 	esettings.row[i].rsize = 0;
 	esettings.row[i].render = NULL;
@@ -609,17 +615,32 @@ void einsert_char (int c) {
 void einsert_new_line() {
 	if (esettings.cx == 0) {
 		insert_row(esettings.cy, "", 0);
+		++esettings.cy;
+		esettings.cx = 0;
 	} else {
 		erow *row = &esettings.row[esettings.cy];
-		insert_row(esettings.cy+1, &row->chars[esettings.cx], row->size-esettings.cx);
-		row = &esettings.row[esettings.cy];
+		str buf;
+		str_init(&buf);
+		
+		// Retain Indentation level by inserting indentation
+		int tabs = row->indent_level;
+		while (tabs--) str_append(&buf, "\t", 1);
+
+		str_append(&buf, &row->chars[esettings.cx], row->size-esettings.cx);
+		insert_row(esettings.cy+1, buf.buf, buf.len);
+
+		//insert_row(esettings.cy+1, &row->chars[esettings.cx], row->size-esettings.cx);
+
+		row = &esettings.row[esettings.cy]; // Reset pointer
 		row->size = esettings.cx;
 		row->chars[row->size] = '\0';
+
 		update_row(row);
+
+		esettings.cx = row->indent_level;
+		++esettings.cy;
 	}
 
-	++esettings.cy;
-	esettings.cx = 0;
 }
 
 void edel_char() {
