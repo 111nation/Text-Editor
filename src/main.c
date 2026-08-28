@@ -39,11 +39,27 @@ enum editorKey {
 	NO_KEY_PRESS,
 };
 
+enum editorHighlight {
+	HL_NORMAL = 0,
+	HL_NUMBER,
+	HL_MATCH
+};
+
+#define HL_HIGHLIGHT_NUMBERS (1<<0)
+
+/*** Data ***/
+struct editorSyntax {
+	char *filetype;
+	char **filematch;
+	int flags;
+};
+
 typedef struct erow { // Single row data
 	int size;
 	int rsize;
 	char *chars;
 	char *render;
+	unsigned char *hl;
 } erow;
 
 struct editorConfig {
@@ -58,11 +74,25 @@ struct editorConfig {
 	char * filename;				// File name
 	char statusmsg[80];				// Status bar message
 	time_t statusmsg_time;			// Time created
+	struct editorSyntax *syntax;	// Syntax Highlighting: Current File Type
 	struct termios orig_termios;	// Terminal Settings
 };
 
 struct editorConfig esettings;
 
+/*** Filetypes ***/
+char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
+
+// Store all possible file types to add syntax highlighting rules
+struct editorSyntax HLDB[] = {
+	{
+		"c",
+		C_HL_extensions,
+		HL_HIGHLIGHT_NUMBERS
+	},
+};	
+
+#define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
 /** String Handling **/
 typedef struct {
@@ -106,10 +136,116 @@ void str_free(str* self) {
 
 /*** Prototypes ***/
 char* prompt(char* prompt, void (*callback)(char *, int));
+void panic(const char *s);
+
+/** Terminal **/
+void disableRawMode() {
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&esettings.orig_termios) == -1) {
+		panic("tcsetattr");
+	}
+}
+
+void enableRawMode() {
+	// Save default settings
+	// Apply old terminal settings when program
+	if (tcgetattr(STDIN_FILENO, &esettings.orig_termios) == -1) panic("tcgetattr");
+	atexit(disableRawMode);
+
+	struct termios raw = esettings.orig_termios;
+
+	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+	raw.c_oflag &= ~(OPOST);
+	raw.c_cflag |= (CS8);
+	raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
+
+	raw.c_cc[VMIN] = 0; // read() can terminate with a min of 0 bytes recieved
+	raw.c_cc[VTIME] = 1; // read() maximum wait time is 100 milliseconds
+
+	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&raw) == -1) panic("tcgetattr");
+}
+
+/*** Syntax Highlighting ***/
+int is_seperator(int c) {
+	return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
+void eupdate_syntax(erow *row) {
+	row->hl = realloc(row->hl, row->rsize);
+	memset(row->hl, HL_NORMAL, row->rsize);
+	
+	if (esettings.syntax == NULL) return;
+
+	int prev_sep = 1;	
+
+	int i = 0;
+	while (i < row->rsize) {
+		char c = row->render[i];
+		unsigned char prev_hl = (i > 0) ? row->hl[i-1] : HL_NORMAL;	
+	
+		if (esettings.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+			if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) ||
+				(c == '.' && prev_hl == HL_NUMBER)) {
+				row->hl[i] = HL_NUMBER;
+				++i;
+				prev_sep = 0;
+				continue;
+			}
+		}
+	   	
+		prev_sep = is_seperator(c);
+		++i;
+	}
+}
+
+int esyntax_to_color(int hl) {
+	switch (hl) {
+		case HL_NUMBER: return 31;
+		case HL_MATCH: return 34;	
+		default: return 37;
+	}
+}
+
+void eselect_syntax_highlight() {
+	/// Based on type of file
+	/// We try set the syntax highlighting rules
+	///	Selected from Hightlight Data base
+
+	esettings.syntax = NULL;
+	if (esettings.filename == NULL) return;
+
+	char *file_ext = strrchr(esettings.filename, '.');
+	
+	// Check every entry in database and match correct syntax highlighting rules
+	for (unsigned int i = 0; i < HLDB_ENTRIES; i++) {
+		struct editorSyntax *s = &HLDB[i];
+		unsigned int j = 0;
+		
+		// Compare character for character if the extension 
+		// of current fetched predefined file extensions match
+		while (s->filematch[i]) {
+			int is_ext = (s->filematch[i][0] == '.'); 
+			// Not every 'special file' is identifiable by its extension
+			
+			// Match correct file extension in database
+			// To get filetype of opened file
+			if ((is_ext && file_ext && !strcmp(file_ext, s->filematch[i])) ||
+				(!is_ext && strstr(esettings.filename, s->filematch[i]))) {
+				esettings.syntax = s;
+				
+				for (int filerow = 0; filerow < esettings.numrows; filerow++) {
+					eupdate_syntax(&esettings.row[filerow]);	
+				}
+
+				return;
+			}
+			
+			++i; 
+		}		
+	}
+}
 
 /*** Keys ***/
 #define CTRL_KEY(k) ((k) & 0x1f)
-
 
 void edraw_rows(str* buf) {
 	for (unsigned int i = 0; i < esettings.ws_row; i++) {
@@ -137,10 +273,39 @@ void edraw_rows(str* buf) {
 			// Display file 
 			int len = esettings.row[filerow].rsize - esettings.coloff;
 			if (len < 0) len = 0;
-			if (len > esettings.ws_col-LEFT_PADDING) len = esettings.ws_col-LEFT_PADDING; // Truncate
+			if (len > esettings.ws_col-LEFT_PADDING) len = esettings.ws_col-LEFT_PADDING;
+
 			int padding = LEFT_PADDING;
 			while (padding--) str_append(buf, " ", 1);
-			str_append(buf, &esettings.row[filerow].render[esettings.coloff], len);
+																						
+			// Print Line
+			char *c = &esettings.row[filerow].render[esettings.coloff];
+			unsigned char *hl = &esettings.row[filerow].hl[esettings.coloff];
+			int current_color = -1;
+
+			for (int i = 0; i < len; i++) {
+				if (hl[i] == HL_NORMAL) {
+
+					if (current_color != -1) {
+						str_append(buf, "\x1b[39m", 5);
+						current_color = -1;
+					}
+
+					str_append(buf, &c[i], 1);
+				} else {
+					int color = esyntax_to_color(hl[i]);	
+					if (color != current_color) {
+						current_color = color;
+						char ansi_color[16];
+						int clen = snprintf(ansi_color, sizeof(ansi_color), "\x1b[%dm", color);
+						str_append(buf, ansi_color, clen);
+					}
+					
+					str_append(buf, &c[i], 1);
+				}
+			}	
+			
+			str_append(buf, "\x1b[39m", 5); 
 		}
 
 		str_append(buf, "\x1b[K", 3);
@@ -209,6 +374,8 @@ void update_row(erow *row) {
 	}
 	row->render[index] = '\0';
 	row->rsize = index;
+	
+	eupdate_syntax(row);
 }
 
 void insert_row(int i, char* s, size_t len) {
@@ -224,6 +391,7 @@ void insert_row(int i, char* s, size_t len) {
 	
 	esettings.row[i].rsize = 0;
 	esettings.row[i].render = NULL;
+	esettings.row[i].hl = NULL;
 	update_row(&esettings.row[i]);
 
 	++esettings.numrows;
@@ -233,6 +401,7 @@ void insert_row(int i, char* s, size_t len) {
 void efree_row(erow* row) {
 	free(row->render);
 	free(row->chars);
+	free(row->hl);
 }
 
 void edel_row(int i) {
@@ -318,7 +487,7 @@ void edel_char() {
 
 void escroll() {
 	esettings.rx = 0;
-	if (esettings.cy < esettings.numrows) {
+	if (esettings.cy < esettings.numrows && esettings.cy >= 0) {
 		esettings.rx = row_cx_to_rx(&esettings.row[esettings.cy], esettings.cx);
 	}
 
@@ -339,8 +508,9 @@ void escroll() {
 		esettings.coloff = esettings.rx;
 	}
 
-	if (esettings.rx >= esettings.coloff + esettings.ws_col) {
-		esettings.coloff = esettings.rx - esettings.ws_col + 1;
+	// Scroll Right
+	if (esettings.rx >= esettings.coloff + (esettings.ws_col-LEFT_PADDING)) {
+		esettings.coloff = esettings.rx - (esettings.ws_col-LEFT_PADDING) + 1;
 	}
 }
 
@@ -365,16 +535,17 @@ void edraw_message(str* buf) {
 void edraw_status(str* buf) {
 	str_append(buf, "\x1b[7m", 4);
 
-	char status[80], rstatus[80], modified[20];
+	char status[120], rstatus[80], modified[40];
 
 	int mlen = snprintf(modified, sizeof(modified), "(%d bytes modified)", esettings.dirty);
 
 	int len = snprintf(status, sizeof(status), "%s %.20s - %d of %d lines",
-			esettings.dirty ? modified : "",
-			esettings.filename ? esettings.filename : "[Empty File]", 
-			esettings.cy+1, esettings.numrows);
+				esettings.dirty ? modified : "",
+				esettings.filename ? esettings.filename : "[Empty File]", 
+				esettings.cy+1, esettings.numrows);
 
-	int rlen = snprintf(rstatus, sizeof(rstatus), "");
+	int rlen = snprintf(rstatus, sizeof(rstatus), "%s ",
+				esettings.syntax ? esettings.syntax->filetype : "Plain Text");
 
 	if (len > esettings.ws_col) len = esettings.ws_col;
 	str_append(buf, status, len);
@@ -424,31 +595,6 @@ void panic(const char *s) {
 	clear_screen();
 	perror(s);
 	exit(1);
-}
-
-void disableRawMode() {
-	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&esettings.orig_termios) == -1) {
-		panic("tcsetattr");
-	}
-}
-
-void enableRawMode() {
-	// Save default settings
-	// Apply old terminal settings when program
-	if (tcgetattr(STDIN_FILENO, &esettings.orig_termios) == -1) panic("tcgetattr");
-	atexit(disableRawMode);
-
-	struct termios raw = esettings.orig_termios;
-
-	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-	raw.c_oflag &= ~(OPOST);
-	raw.c_cflag |= (CS8);
-	raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
-
-	raw.c_cc[VMIN] = 0; // read() can terminate with a min of 0 bytes recieved
-	raw.c_cc[VTIME] = 1; // read() maximum wait time is 100 milliseconds
-
-	if (tcsetattr(STDIN_FILENO, TCSAFLUSH,&raw) == -1) panic("tcgetattr");
 }
 
 int get_key() {
@@ -521,7 +667,7 @@ char* prompt(char* prompt, void (*callback)(char *, int)) {
 	size_t len = 0;
 	buf[0] = '\0';
 	
-	while (1) {
+	while (TRUE) {
 		eset_message(prompt, buf);
 		erefresh_screen();
 		
@@ -637,9 +783,16 @@ char* erows_to_string(int *buflen) {
 void eopen(char* filename) {
 	free(esettings.filename);
 	esettings.filename = strdup(filename);
+	
+	eselect_syntax_highlight();
 
 	FILE *fp = fopen(filename, "r");
-	if (!fp) panic("fopen");
+	if (!fp) {
+		esettings.dirty = 0;
+		
+		return;		
+		//panic("fopen");
+	}
 
 	char *line = NULL;
 	size_t linecap = 0;
@@ -700,6 +853,15 @@ void esave() {
 void find_callback(char *query, int key) {
 	static int last_match = -1;
 	static int direction = 1;
+	
+	static int saved_hl_line;
+	static char* saved_hl = NULL;
+
+	if (saved_hl) {
+		memcpy(esettings.row[saved_hl_line].hl, saved_hl, esettings.row[saved_hl_line].rsize);
+		free(saved_hl);
+		saved_hl = NULL;
+	}
 
 	if (strlen(query) == 0) {
 		last_match = -1;
@@ -737,12 +899,18 @@ void find_callback(char *query, int key) {
 		}
 
 		erow* row = &esettings.row[current];
-		char *match = strstr(row->render, query);
+		char *match = strcasestr(row->render, query);
 		if (match) {
 			last_match = current;
 			esettings.cy = current;
 			esettings.cx = row_rx_to_cx(row, match-row->render);
 			esettings.rowoff = esettings.numrows;
+		
+			saved_hl_line = current;
+			saved_hl = malloc(row->rsize);
+			memcpy(saved_hl, row->hl, row->rsize);
+					
+			memset(&row->hl[match-row->render], HL_MATCH, strlen(query));
 			break;
 		}
 		
@@ -852,8 +1020,6 @@ void process_keypress(int c) {
 			break;
 
 		default:
-			// Reject Ctrl key combinations
-			if (c == (c & 0x1f)) break;
 			einsert_char(c);
 			break;
 	}
@@ -927,6 +1093,7 @@ void init() {
 	esettings.statusmsg[0] = '\0';
 	esettings.statusmsg_time = 0;
 	esettings.dirty = 0;
+	esettings.syntax = NULL;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
