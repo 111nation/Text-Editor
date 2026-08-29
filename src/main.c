@@ -98,7 +98,7 @@ struct editorConfig esettings;
 char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
 char *C_HL_keywords[] = {
 	"switch", "if", "while", "for", "break", "continue", "return", "else", 
-	"struct", "union", "typedef", "static", "enum", "class", "case",
+	"struct", "union", "typedef", "static", "enum", "class", "case", "default",
 
 	"int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
 	"void|", NULL,
@@ -192,7 +192,7 @@ void enableRawMode() {
 
 /*** Syntax Highlighting ***/
 int is_seperator(int c) {
-	return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+	return isspace(c) || c == '\0' || strchr(":,.()+-/*=~%<>[];", c) != NULL;
 }
 
 void eupdate_syntax(erow *row) {
@@ -328,13 +328,13 @@ void eupdate_syntax(erow *row) {
 
 int esyntax_to_color(int hl) {
 	switch (hl) {
-		case HL_NUMBER: return 31;
+		case HL_NUMBER: return 93;
 		case HL_COMMENT:
 		case HL_MLCOMMENT: return 36;
-		case HL_STRING: return 35;
-		case HL_KEYWORD1: return 33;
-		case HL_KEYWORD2: return 32;
-		case HL_MATCH: return 34;	
+		case HL_STRING: return 92;
+		case HL_KEYWORD1: return 95;
+		case HL_KEYWORD2: return 96;
+		case HL_MATCH: return 30;	
 		default: return 37;
 	}
 }
@@ -436,7 +436,7 @@ void edraw_rows(str* buf) {
 		
 			if (filerow != esettings.cy) str_append(buf, "\x1b[0m", 4);
 				
-			if (filerow == esettings.cy) str_append(buf, "\x1b[100m", 6);
+			if (filerow == esettings.cy) str_append(buf, "\x1b[48;5;236m", 11);
 																																																																																																																																																																										
 			// Print Line
 			char *c = &esettings.row[filerow].render[esettings.coloff];
@@ -459,6 +459,12 @@ void edraw_rows(str* buf) {
 					}
 				} else if (hl[i] == HL_NORMAL) {
 					if (current_color != -1) {
+						if (filerow == esettings.cy) {
+							str_append(buf, "\x1b[48;5;236m", 11);
+						} else {
+							str_append(buf, "\x1b[49m", 5);
+						}
+							
 						str_append(buf, "\x1b[39m", 5);
 						current_color = -1;
 					}
@@ -467,19 +473,33 @@ void edraw_rows(str* buf) {
 				} else {
 					int color = esyntax_to_color(hl[i]);	
 					if (color != current_color) {
+						if (filerow == esettings.cy) {
+							str_append(buf, "\x1b[48;5;236m", 11);
+						} else {
+							str_append(buf, "\x1b[49m", 5);	
+						}																																	
+
 						current_color = color;
-						char ansi_color[16];
-						int clen = snprintf(ansi_color, sizeof(ansi_color), "\x1b[%dm", color);
+						char ansi_color[32];
+						int clen;
+						
+						if (hl[i] == HL_MATCH) {
+							clen = snprintf(ansi_color, sizeof(ansi_color), "\x1b[%d;103m", color);
+						} else {
+							clen = snprintf(ansi_color, sizeof(ansi_color), "\x1b[%dm", color);
+						}
+												
 						str_append(buf, ansi_color, clen);
-					}
+					}  
 					
-					str_append(buf, &c[i], 1);
+					str_append(buf, &c[i], 1);					
 				}
 			}	
 	
 			// Draw empty characters for the remainder of the line
 			// For the current row highlight indicator
 			if (filerow == esettings.cy) {
+				str_append(buf, "\x1b[48;5;236m", 11);	
 				for (i = i; i < esettings.ws_col-esettings.padding; i++) {
 					str_append(buf, " ", 1);
 				}
@@ -683,7 +703,7 @@ void einsert_new_line() {
 			++tabs;
 		}
 
-		int tabs_save = 0;
+		int tabs_save = tabs;
 		while (tabs--) str_append(&buf, "\t", 1);
 
 		str_append(&buf, &row->chars[esettings.cx], row->size-esettings.cx);
