@@ -4,7 +4,44 @@
 
 ## Demo Video
 
-<video src="https://github.com/user-attachments/assets/cbc12382-6372-4dbe-aefa-130904038f1e"></video>
+<video src="https://github.com/user-attachments/assets/5ba89958-ac73-4715-a102-51c921ec2e4d"></video>
+
+### Features
+
+<table align="center">
+	<tr>
+		<th width="500px">Feature</th>
+		<th width="300px">Description</th>
+	</tr>
+	<tr>
+		<td>		
+			<img width="100%" alt="Screenshot_20260829_185529" src="https://github.com/user-attachments/assets/0fad41bc-162f-43d2-b12b-e21c19744b9e" />
+		</td>
+		<td>
+			<h3>Syntax Highlighting</h3> <br /> <br/>
+			Syntax highlighting works out of the box for select languages. (C, Python and <a href="https://github.com/111nation/TinyEngine/">TinyScript</a>. Syntax highlighting makes working with TinyEngine's <a href="https://github.com/111nation/TinyEngine/">TinyScript</a> a whole lot easier
+		</td>
+	</tr>
+	<tr>
+		<td>		
+			<img width="100%" alt="Screenshot_20260829_185529" src="https://github.com/user-attachments/assets/f325c308-e128-4adf-a8c8-c9cbb00c8d5c" />
+		</td>
+		<td>
+			<h3>Search Feature</h3> <br /> <br/>
+			No slow navigation, jump instantly to the important parts.
+		</td>
+	</tr>
+	<tr>
+	<tr>
+		<td>		
+			<img width="100%" alt="Screenshot_20260829_185529" src="https://github.com/user-attachments/assets/ed24a488-a54f-4110-9ff8-5a46586c1bae" />
+		</td>
+		<td>
+			<h3>Lightning fast boot time</h3> <br /> <br/>
+			No Electron garbage! Editing text is just milliseconds away!
+		</td>
+	</tr>
+</table>
 
 ## Installation
 
@@ -73,6 +110,14 @@ Contributors are needed to test and write the Windows build process!
 		</td>
 		<td>
 			Quit Editor. <br/><br/><b>Note:</b> You may have to press <kbd>Ctrl</kbd> + <kbd>Q</kbd> again to force quit without saving.
+		</td>
+	</tr>
+	<tr>
+		<td>
+			<kbd>Ctrl</kbd> + <kbd>F</kbd>
+		</td>
+		<td>
+			Search feature. Use arrow keys while searching to navigate through all matched text.
 		</td>
 	</tr>
 </table>
