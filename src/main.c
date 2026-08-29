@@ -13,7 +13,7 @@
 #include <time.h>
 
 #define VERSION "0.0.1"
-#define LEFT_PADDING 3
+#define MIN_PADDING 1
 #define TAB_STOP 4
 #define STATUS_TIME 5
 #define QUIT_TIMES 1
@@ -84,7 +84,8 @@ struct editorConfig {
 	int coloff;						// Character of current line first displayed on screen
 	erow* row;						// File row data
 	int dirty;						// Indicate if file has been modifed
-	char * filename;				// File name
+	int padding;					// Gloabal padding variable	
+	char* filename;					// File name
 	char statusmsg[80];				// Status bar message
 	time_t statusmsg_time;			// Time created
 	struct editorSyntax *syntax;	// Syntax Highlighting: Current File Type
@@ -123,6 +124,9 @@ typedef struct {
 } str;
 
 static inline int clamp(int a, int min, int max) {
+	/// Clamp between values (inclusive)
+	/// Only the min argument determines if the value is out of bounds
+	/// I.E: if max < min, max will not trigger clamp to bound a to max
 	if (a < min) return min;
 	if (a > max) return max;
 	return a;
@@ -377,6 +381,17 @@ void eselect_syntax_highlight() {
 /*** Keys ***/
 #define CTRL_KEY(k) ((k) & 0x1f)
 
+int get_padding_size() {
+	// Determine the padding size based on
+	// The number of lines in the file
+	// Used for displaying line numbers
+	int numrows = esettings.numrows;
+	int padding = 0;
+	while ((numrows / 10) > 0) ++padding;
+	
+	return padding; 
+}
+
 void edraw_rows(str* buf) {
 	for (unsigned int i = 0; i < esettings.ws_row; i++) {
 		int filerow = i + esettings.rowoff;
@@ -403,18 +418,33 @@ void edraw_rows(str* buf) {
 			// Display file 
 			int len = esettings.row[filerow].rsize - esettings.coloff;
 			if (len < 0) len = 0;
-			if (len > esettings.ws_col-LEFT_PADDING) len = esettings.ws_col-LEFT_PADDING;
-
-			int padding = LEFT_PADDING;
-			while (padding--) str_append(buf, " ", 1);
-																						
+			if (len > esettings.ws_col-esettings.padding) len = esettings.ws_col-esettings.padding;
+			
+			// Print line number
+			char linenumber[10];
+			int linenumber_len = snprintf(linenumber, sizeof(linenumber), "%d", filerow+1);
+			
+			if (filerow != esettings.cy) str_append(buf, "\x1b[2m", 4);
+			
+			int padding = esettings.padding-linenumber_len-1; // Don't print divider twice
+			while (padding > 0) {
+				str_append(buf, " ", 1);
+				--padding;
+			}
+			str_append(buf, linenumber, linenumber_len);
+			str_append(buf, " ", 1); 			// Divider
+		
+			if (filerow != esettings.cy) str_append(buf, "\x1b[0m", 4);
+				
+			if (filerow == esettings.cy) str_append(buf, "\x1b[100m", 6);
+																																																																																																																																																																										
 			// Print Line
 			char *c = &esettings.row[filerow].render[esettings.coloff];
 			unsigned char *hl = &esettings.row[filerow].hl[esettings.coloff];
 			int current_color = -1;
 
-			for (int i = 0; i < len; i++) {
-
+			int i;
+			for (i = 0; i < len; i++) {
 				if (iscntrl(c[i])) {
 					// Handle drawing non-printable characters
 					char sym = (c[i] <= 26) ? '@' + c[i] : '?';
@@ -446,8 +476,16 @@ void edraw_rows(str* buf) {
 					str_append(buf, &c[i], 1);
 				}
 			}	
+	
+			// Draw empty characters for the remainder of the line
+			// For the current row highlight indicator
+			if (filerow == esettings.cy) {
+				for (i = i; i < esettings.ws_col-esettings.padding; i++) {
+					str_append(buf, " ", 1);
+				}
+			} 
 			
-			str_append(buf, "\x1b[39m", 5); 
+			str_append(buf, "\x1b[39;49m", 8); 
 		}
 
 		str_append(buf, "\x1b[K", 3);
@@ -463,6 +501,19 @@ void clear_screen() {
 }
 
 /** Row Operations **/
+void update_padding() {
+	int digits = 0;
+	int numrows = esettings.numrows;
+	while (numrows > 0) {
+		++digits;
+		numrows /= 10;
+	}
+
+	esettings.padding = digits; // Account for extra dividing space
+	if (esettings.padding < MIN_PADDING) esettings.padding = MIN_PADDING;
+	esettings.padding += 1; // Account for extra space
+}
+
 int row_cx_to_rx(erow *row, int cx) {
 	int rx = 0;
 	for (int i = 0; i < cx; i++) {
@@ -548,6 +599,7 @@ void insert_row(int i, char* s, size_t len) {
 	esettings.row[i].hl_open_comment = 0;
 	
 	update_row(&esettings.row[i]);
+	update_padding();
 
 	++esettings.numrows;
 	++esettings.dirty;
@@ -573,6 +625,7 @@ void edel_row(int i) {
 	--esettings.numrows;
 
 	esettings.dirty+=removed_chars;
+	update_padding();
 }
 
 void erow_insert_char(erow *row, int i, int c) {
@@ -623,7 +676,14 @@ void einsert_new_line() {
 		str_init(&buf);
 		
 		// Retain Indentation level by inserting indentation
-		int tabs = row->indent_level;
+		//int tabs = row->indent_level;
+		int tabs = 0;
+		for (int i = 0; i < esettings.cx; i++) {
+			if (row->chars[i] != '\t') break;
+			++tabs;
+		}
+
+		int tabs_save = 0;
 		while (tabs--) str_append(&buf, "\t", 1);
 
 		str_append(&buf, &row->chars[esettings.cx], row->size-esettings.cx);
@@ -637,7 +697,7 @@ void einsert_new_line() {
 
 		update_row(row);
 
-		esettings.cx = row->indent_level;
+		esettings.cx = tabs_save;
 		++esettings.cy;
 	}
 
@@ -683,8 +743,8 @@ void escroll() {
 	}
 
 	// Scroll Right
-	if (esettings.rx >= esettings.coloff + (esettings.ws_col-LEFT_PADDING)) {
-		esettings.coloff = esettings.rx - (esettings.ws_col-LEFT_PADDING) + 1;
+	if (esettings.rx >= esettings.coloff + (esettings.ws_col-esettings.padding)) {
+		esettings.coloff = esettings.rx - (esettings.ws_col-esettings.padding) + 1;
 	}
 }
 
@@ -755,7 +815,7 @@ void erefresh_screen() {
 	char temp[32];
 	snprintf(temp, sizeof(temp), "\x1b[%d;%dH", 
 			(esettings.cy - esettings.rowoff)+1,
-		 	(esettings.rx - esettings.coloff)+1 + LEFT_PADDING);
+		 	(esettings.rx - esettings.coloff)+1+esettings.padding);
 	str_append(&buf, temp, strlen(temp));
 
 	str_append(&buf, "\x1b[?25h", 6);	 // Unhide cursor
@@ -979,7 +1039,10 @@ void eopen(char* filename) {
 
 	free(line);
 	fclose(fp);
+
 	esettings.dirty = 0;
+	
+	update_padding();
 }
 
 void esave() {
@@ -1270,6 +1333,7 @@ void init() {
 	esettings.statusmsg_time = 0;
 	esettings.dirty = 0;
 	esettings.syntax = NULL;
+	esettings.padding = 0;
 
 	enableRawMode();
 	if (get_window_size(&esettings.ws_row, &esettings.ws_col) == -1) panic("get_window_size");
