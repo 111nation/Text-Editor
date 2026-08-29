@@ -101,8 +101,26 @@ char *C_HL_keywords[] = {
 	"struct", "union", "typedef", "static", "enum", "class", "case",
 
 	"int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
-	"void|", NULL,
+	"void|", "bool|", NULL,
 };
+
+char *Python_HL_extensions[] = { ".py", NULL };
+char *Python_HL_keywords[] = {
+	"as", "assert", "async", "await", "break", "case", "class", "continue", "def", 
+	"del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
+	"in", "is", "lambda", "match", "nonlocal", "and", "or", "not", "pass", "raise", "return",
+	"try", "while", "with", "yield", "type", "print", "import",	  	
+	
+	"int|", "float|", "bool|", "str|", "False|", "True|", "None|", NULL,  		
+};
+
+char *TinyScript_HL_extensions[] = { ".tss", NULL };
+char *TinyScript_HL_keywords[] = {				
+	"IF", "WHILE", "THEN", "END", "DEFINE", "CALL", "DO", "ELSE",
+			
+	"JOYSTICK_X|", "JOYSTICK_Y|", "JOYSTICK_BUTTON|", "BUTTON_A|", 
+	"TIME|", "SCREEN_WIDTH|", "SCREEN_HEIGHT|", "NOT|", "AND|", "OR|", NULL,
+};	
 
 // Store all possible file types to add syntax highlighting rules
 struct editorSyntax HLDB[] = {
@@ -113,6 +131,20 @@ struct editorSyntax HLDB[] = {
 		"//", "/*", "*/",
 		HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
 	},
+	{
+		"py",
+		Python_HL_extensions,
+		Python_HL_keywords,
+		"#", NULL, NULL,
+		HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS										
+	},
+	{
+		"tinyscript",
+		TinyScript_HL_extensions,
+		TinyScript_HL_keywords,
+		"#", NULL, NULL,
+		HL_HIGHLIGHT_NUMBERS,									
+	},				
 };	
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
@@ -328,13 +360,13 @@ void eupdate_syntax(erow *row) {
 
 int esyntax_to_color(int hl) {
 	switch (hl) {
-		case HL_NUMBER: return 31;
+		case HL_NUMBER: return 93;
 		case HL_COMMENT:
 		case HL_MLCOMMENT: return 36;
-		case HL_STRING: return 35;
-		case HL_KEYWORD1: return 33;
-		case HL_KEYWORD2: return 32;
-		case HL_MATCH: return 34;	
+		case HL_STRING: return 92;
+		case HL_KEYWORD1: return 35;
+		case HL_KEYWORD2: return 96;
+		case HL_MATCH: return 30;	
 		default: return 37;
 	}
 }
@@ -356,14 +388,14 @@ void eselect_syntax_highlight() {
 		
 		// Compare character for character if the extension 
 		// of current fetched predefined file extensions match
-		while (s->filematch[i]) {
-			int is_ext = (s->filematch[i][0] == '.'); 
+		while (s->filematch[j]) {
+			int is_ext = (s->filematch[j][0] == '.'); 
 			// Not every 'special file' is identifiable by its extension
 			
 			// Match correct file extension in database
 			// To get filetype of opened file
-			if ((is_ext && file_ext && !strcmp(file_ext, s->filematch[i])) ||
-				(!is_ext && strstr(esettings.filename, s->filematch[i]))) {
+			if ((is_ext && file_ext && !strcmp(file_ext, s->filematch[j])) ||
+				(!is_ext && strstr(esettings.filename, s->filematch[j]))) {
 				esettings.syntax = s;
 				
 				for (int filerow = 0; filerow < esettings.numrows; filerow++) {
@@ -373,7 +405,7 @@ void eselect_syntax_highlight() {
 				return;
 			}
 			
-			++i; 
+			++j; 
 		}		
 	}
 }
@@ -436,7 +468,7 @@ void edraw_rows(str* buf) {
 		
 			if (filerow != esettings.cy) str_append(buf, "\x1b[0m", 4);
 				
-			if (filerow == esettings.cy) str_append(buf, "\x1b[100m", 6);
+			if (filerow == esettings.cy) str_append(buf, "\x1b[48;5;236m", 11);
 																																																																																																																																																																										
 			// Print Line
 			char *c = &esettings.row[filerow].render[esettings.coloff];
@@ -459,7 +491,7 @@ void edraw_rows(str* buf) {
 					}
 				} else if (hl[i] == HL_NORMAL) {
 					if (current_color != -1) {
-						str_append(buf, "\x1b[39m", 5);
+						str_append(buf, "\x1b[39;49m", 8);
 						current_color = -1;
 					}
 
@@ -469,7 +501,8 @@ void edraw_rows(str* buf) {
 					if (color != current_color) {
 						current_color = color;
 						char ansi_color[16];
-						int clen = snprintf(ansi_color, sizeof(ansi_color), "\x1b[%dm", color);
+						int clen = snprintf(ansi_color, sizeof(ansi_color), "%s\x1b[%dm",
+									hl[i] == HL_MATCH ? "\x1b[103m" : "", color);
 						str_append(buf, ansi_color, clen);
 					}
 					
@@ -683,7 +716,7 @@ void einsert_new_line() {
 			++tabs;
 		}
 
-		int tabs_save = 0;
+		int tabs_save = tabs;
 		while (tabs--) str_append(&buf, "\t", 1);
 
 		str_append(&buf, &row->chars[esettings.cx], row->size-esettings.cx);
